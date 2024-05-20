@@ -22,9 +22,9 @@ ui <- page_fillable(
         ),
         shinyWidgets::pickerInput(inputId="y", label="y (response variable):", choices="", multiple=FALSE, options=list(`live-search`=TRUE, `actions-box`=TRUE)),
         shinyWidgets::pickerInput(inputId="x", label="x (explanatory variable):", choices="", multiple=FALSE, options=list(`live-search`=TRUE, `actions-box`=TRUE)),
-        # shinyWidgets::materialSwitch(inputId="x_numeric", label="x is numeric (will not switch if the x variable is clearly not numeric)", value=TRUE, status="primary", right=TRUE),
         shinyWidgets::pickerInput(inputId="labels", label="Labels of each level or observation relating to the explanatory variable:", choices="", multiple=TRUE, options=list(`live-search`=TRUE, `actions-box`=TRUE)),
 
+        shinyWidgets::materialSwitch(inputId="regress", label="Fit a logistic, linear, quadratic or cubic regression on the main and additional variables?", value=FALSE, status="primary", right=TRUE),
         shinyWidgets::pickerInput(inputId="y_additional", label="additional y axis regression line (only applicable if x is numeric):", choices="", multiple=TRUE, options=list(`live-search`=TRUE, `actions-box`=TRUE)),
         textInput("logit_or_polyDegree", "Fit logistic or polynomial regression? Enter logistic, 1, 2, or 3 separated by spaces each of which correspond to the how the model treat the x variable.", value="3")
       ),
@@ -102,8 +102,8 @@ server <- function(input, output, session) {
           eval(parse(text=paste0("df$y_additional_", i, " = dat$", input$y_additional[i])))
         }
     }
-    idx = which(rowSums(is.na(df)) == 0)
-    df = droplevels(df[idx, ])
+    # idx = which(rowSums(is.na(df)) == 0)
+    # df = droplevels(df[idx, ])
     vec_logit_or_polyd_tmp = unlist(strsplit(input$logit_or_polyDegree, " "))
     vec_logit_or_polyd = c()
     for (x in vec_logit_or_polyd_tmp) {
@@ -147,14 +147,7 @@ server <- function(input, output, session) {
       ##############################################
       ### Scatter plot for numeric x variable    ###
       ##############################################
-      if (vec_logit_or_polyd[1]==0) {
-        fit = glm(y ~ x, family=binomial(link='logit'), data=df)
-      } else {
-        fit = lm(y ~ poly(x, vec_logit_or_polyd[1]), data=df)
-      }
-      df_fit = data.frame(summary(fit)$coef)
-      df_fit$Pr[df_fit$Pr >= 0.0001] = round(df_fit$Pr[df_fit$Pr >= 0.0001], 4)
-      df_fit$Pr[df_fit$Pr < 0.0001] = "<0.0001"
+      df = df[order(df$x, decreasing=FALSE), ]
       p = plotly::plot_ly(data=df,
         y=~y,
         x=~x,
@@ -162,45 +155,60 @@ server <- function(input, output, session) {
         type='scatter',
         showlegend=TRUE
       )
-      p = p %>% plotly::add_trace(y=~fitted(fit)[order(x)], x=~x[order(x)], mode="line", color=NULL,
-        hoverinfo='text',
-        text=~paste(
-          "y = ", input$y,
-          "<br>Intercept:", round(df_fit$Estimate[1], 4), " (p=", df_fit$Pr[1], ")", 
-          "<br>Linear coefficient:", round(df_fit$Estimate[2], 4), " (p=", df_fit$Pr[2], ")", 
-          "<br>Quadratic coefficient:", round(df_fit$Estimate[3], 4), " (p=", df_fit$Pr[3], ")", 
-          "<br>Cubic coefficient:", round(df_fit$Estimate[4], 4), " (p=", df_fit$Pr[4], ")", 
-          "<br>R-squared:", round(100*summary(fit)$r.squared), "%",
-          "<br>Deviance:", round(1*summary(fit)$deviance),
-          "<br>Correlation:", round(100*cor(df$x, df$y)), "%",
-          "<br>n = ", nrow(df)
-        ),
-        showlegend=FALSE
-      )
-      if (length(input$y_additional) > 0) {
-        for (i in 1:length(input$y_additional)) {
-          if (vec_logit_or_polyd[i+1]==0) {
-            eval(parse(tex=paste0("fit_additional_", i, " = glm(y_additional_", i, " ~ x, family=binomial(link='logit'), data=df)")))
-          } else {
-            eval(parse(tex=paste0("fit_additional_", i, " = lm(y_additional_", i, " ~ poly(x, vec_logit_or_polyd[", i+1, "]), data=df)")))
+      if (input$regress) {
+        if (vec_logit_or_polyd[1]==0) {
+          y_min = min(df$y, na.rm=TRUE)
+          y_max = max(df$y, na.rm=TRUE)
+          df$y_logit = (df$y - y_min) / (y_max - y_min)
+          fit = glm(y_logit ~ x, family=binomial(link='logit'), data=df)
+          df$y_hat = (fitted(fit) * (y_max - y_min)) + y_min
+        } else {
+          fit = lm(y ~ poly(x, vec_logit_or_polyd[1]), data=df)
+          df$y_hat = fitted(fit)
+        }
+        df_fit = data.frame(summary(fit)$coef)
+        df_fit$Pr[df_fit$Pr >= 0.0001] = round(df_fit$Pr[df_fit$Pr >= 0.0001], 4)
+        df_fit$Pr[df_fit$Pr < 0.0001] = "<0.0001"
+        p = p %>% plotly::add_trace(data=df, y=~y_hat, x=~x, mode="line", color=NULL,
+          hoverinfo='text',
+          text=~paste(
+            "y = ", input$y,
+            "<br>Intercept:", round(df_fit$Estimate[1], 4), " (p=", df_fit$Pr[1], ")", 
+            "<br>Linear coefficient:", round(df_fit$Estimate[2], 4), " (p=", df_fit$Pr[2], ")", 
+            "<br>Quadratic coefficient:", round(df_fit$Estimate[3], 4), " (p=", df_fit$Pr[3], ")", 
+            "<br>Cubic coefficient:", round(df_fit$Estimate[4], 4), " (p=", df_fit$Pr[4], ")", 
+            "<br>R-squared:", round(100*summary(fit)$r.squared), "%",
+            "<br>Deviance:", round(1*summary(fit)$deviance),
+            "<br>Correlation:", round(100*cor(df$x, df$y)), "%",
+            "<br>n = ", nrow(df)
+          ),
+          showlegend=FALSE
+        )
+        if (length(input$y_additional) > 0) {
+          for (i in 1:length(input$y_additional)) {
+            if (vec_logit_or_polyd[i+1]==0) {
+              eval(parse(tex=paste0("fit_additional_", i, " = glm(y_additional_", i, " ~ x, family=binomial(link='logit'), data=df)")))
+            } else {
+              eval(parse(tex=paste0("fit_additional_", i, " = lm(y_additional_", i, " ~ poly(x, vec_logit_or_polyd[", i+1, "]), data=df)")))
+            }
+            eval(parse(text=paste0("df_fit_additional_", i, " = data.frame(summary(fit_additional_", i, ")$coef)")))
+            eval(parse(text=paste0("df_fit_additional_", i, "$Pr[df_fit_additional_", i, "$Pr >= 0.0001] = round(df_fit_additional_", i, "$Pr[df_fit_additional_", i, "$Pr >= 0.0001], 4)")))
+            eval(parse(text=paste0("df_fit_additional_", i, "$Pr[df_fit_additional_", i, "$Pr < 0.0001] = '<0.0001'")))
+            eval(parse(text=paste0("p = p %>% plotly::add_trace(y=~fitted(fit_additional_", i, ")[order(x)], x=~x[order(x)], mode='line', color=NULL,
+              name=input$y_additional[", i, "],
+              hoverinfo='text',
+              text=~paste(
+                'y_additional_', ", i, ", ' = ', input$y_additional[", i, "],
+                '<br>Intercept:', round(df_fit_additional_", i, "$Estimate[1], 4), ' (p=', df_fit_additional_", i, "$Pr[1], ')', 
+                '<br>Linear coefficient:', round(df_fit_additional_", i, "$Estimate[2], 4), ' (p=', df_fit_additional_", i, "$Pr[2], ')', 
+                '<br>Quadratic coefficient:', round(df_fit_additional_", i, "$Estimate[3], 4), ' (p=', df_fit_additional_", i, "$Pr[3], ')', 
+                '<br>Cubic coefficient:', round(df_fit_additional_", i, "$Estimate[4], 4), ' (p=', df_fit_additional_", i, "$Pr[4], ')', 
+                '<br>R-squared:', round(100*summary(fit_additional_", i, ")$r.squared), '%',
+                '<br>Deviance:', round(1*summary(fit_additional_", i, ")$deviance)
+              ),
+              showlegend=TRUE
+            )")))
           }
-          eval(parse(text=paste0("df_fit_additional_", i, " = data.frame(summary(fit_additional_", i, ")$coef)")))
-          eval(parse(text=paste0("df_fit_additional_", i, "$Pr[df_fit_additional_", i, "$Pr >= 0.0001] = round(df_fit_additional_", i, "$Pr[df_fit_additional_", i, "$Pr >= 0.0001], 4)")))
-          eval(parse(text=paste0("df_fit_additional_", i, "$Pr[df_fit_additional_", i, "$Pr < 0.0001] = '<0.0001'")))
-          eval(parse(text=paste0("p = p %>% plotly::add_trace(y=~fitted(fit_additional_", i, ")[order(x)], x=~x[order(x)], mode='line', color=NULL,
-            name=input$y_additional[", i, "],
-            hoverinfo='text',
-            text=~paste(
-              'y_additional_', ", i, ", ' = ', input$y_additional[", i, "],
-              '<br>Intercept:', round(df_fit_additional_", i, "$Estimate[1], 4), ' (p=', df_fit_additional_", i, "$Pr[1], ')', 
-              '<br>Linear coefficient:', round(df_fit_additional_", i, "$Estimate[2], 4), ' (p=', df_fit_additional_", i, "$Pr[2], ')', 
-              '<br>Quadratic coefficient:', round(df_fit_additional_", i, "$Estimate[3], 4), ' (p=', df_fit_additional_", i, "$Pr[3], ')', 
-              '<br>Cubic coefficient:', round(df_fit_additional_", i, "$Estimate[4], 4), ' (p=', df_fit_additional_", i, "$Pr[4], ')', 
-              '<br>R-squared:', round(100*summary(fit_additional_", i, ")$r.squared), '%',
-              '<br>Deviance:', round(1*summary(fit_additional_", i, ")$deviance)
-            ),
-            showlegend=TRUE
-          )")))
         }
       }
       p = p %>% plotly::layout(
