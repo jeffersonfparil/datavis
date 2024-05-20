@@ -161,7 +161,8 @@ server <- function(input, output, session) {
           y_max = max(df$y, na.rm=TRUE)
           df$y_logit = (df$y - y_min) / (y_max - y_min)
           fit = glm(y_logit ~ x, family=binomial(link='logit'), data=df)
-          df$y_hat = (fitted(fit) * (y_max - y_min)) + y_min
+          idx_x = which(!is.na(df$x) & !duplicated(df$x))
+          df$y_hat[idx_x] = (predict(fit, newx=data.frame(x=df$x[idx_x])) * (y_max - y_min)) + y_min
         } else {
           fit = lm(y ~ poly(x, vec_logit_or_polyd[1]), data=df)
           df$y_hat = fitted(fit)
