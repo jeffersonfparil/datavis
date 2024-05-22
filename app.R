@@ -52,6 +52,8 @@ ui <- page_fillable(
 				shinyWidgets::pickerInput(inputId="x", label="x (explanatory variable):", choices="", multiple=FALSE, options=list(`live-search`=TRUE, `actions-box`=TRUE)),
 				shinyWidgets::pickerInput(inputId="labels", label="Labels of each level or observation relating to the explanatory variable:", choices="", multiple=TRUE, options=list(`live-search`=TRUE, `actions-box`=TRUE)),
 
+				shinyWidgets::materialSwitch(inputId="show_eigenvec", label="If the x and y variables are PC1 and PC2, then do you wish to plot the eigenvectors corresponding to the rotated variables?", value=TRUE, status="primary", right=TRUE),
+
 				shinyWidgets::materialSwitch(inputId="regress", label="Fit a logistic, linear, quadratic or cubic regression on the main and additional variables?", value=FALSE, status="primary", right=TRUE),
 				shinyWidgets::pickerInput(inputId="y_additional", label="additional y axis regression line (only applicable if x is numeric):", choices="", multiple=TRUE, options=list(`live-search`=TRUE, `actions-box`=TRUE)),
 				textInput("logit_or_polyDegree", "Fit logistic or polynomial regression? Enter logistic, 1, 2, or 3 separated by spaces each of which correspond to the how the model treat the x variable.", value="3")
@@ -109,12 +111,17 @@ server <- function(input, output, session) {
 		vec_classes = c()
 		mat_for_pc = NULL
 		for (j in c(1:ncol(dat))) {
+			if (sum(!is.na(dat[, j]))==0) {
+				next
+			}
 			if (is.numeric(dat[, j])) {
 				vec_numerics = c(vec_numerics, vec_colnames[j])
 				mat_normalised = matrix(scale(dat[, j], scale=TRUE, center=TRUE), ncol=1)
+				colnames(mat_normalised) = vec_colnames[j]
 			} else {
 				vec_classes = c(vec_classes, vec_colnames[j])
 				mat_normalised = scale(model.matrix(~0+dat[, j]), scale=TRUE, center=TRUE)
+				colnames(mat_normalised) = gsub("^dat\\[, j\\]", paste0(vec_colnames[j], "_"), colnames(mat_normalised))
 			}
 			if (is.null(mat_for_pc)) {
 				mat_for_pc = mat_normalised
@@ -122,10 +129,19 @@ server <- function(input, output, session) {
 				mat_for_pc = cbind(mat_for_pc, mat_normalised)
 			}
 		}
+		### Mean value imputation of missing data and removal of fixed columns
+		for (j in 1:ncol(mat_for_pc)) {
+			# j = 330
+			idx = which(is.na(mat_for_pc[, j]))
+			if (length(idx) > 0) {
+				print(j)
+				mat_for_pc[idx, j] = mean(mat_for_pc[, j], na.rm=TRUE)
+			}
+		}
 		### Compute and add the first 2 PCs (via singular value decomposition)
-		PCs = prcomp(t(mat_for_pc))
-		dat$PC1 = PCs$rotation[,1]
-		dat$PC2 = PCs$rotation[,2]
+		PCs = prcomp(mat_for_pc)
+		dat$PC1 = PCs$x[,1]
+		dat$PC2 = PCs$x[,2]
 		vec_colnames = c(vec_colnames, "PC1", "PC2")
 		vec_numerics = c(vec_numerics, "PC1", "PC2")
 		### Update the input selection based on the input data
@@ -133,19 +149,22 @@ server <- function(input, output, session) {
 		shinyWidgets::updatePickerInput(session, "labels", choices=sort(vec_classes), selected=vec_classes[1])
 		shinyWidgets::updatePickerInput(session, "y", choices=sort(vec_numerics), selected=vec_numerics[2])
 		shinyWidgets::updatePickerInput(session, "y_additional", choices=sort(vec_numerics), selected=c())
-		return(dat)
+		return(list(dat=dat, PCs=PCs))
 	})
 	#######################################################################
 	### Scatter or violin plot
 	#######################################################################
 	output$plot_1 = renderPlotly({
-		### TEST: input = list(x="time", y="weight", labels="id", y_additional="height", logit_or_polyDegree="logistic")
+		### input = list(x="time", y="weight", labels="id", y_additional="height", logit_or_polyDegree="logistic")
+		### input = list(x="Time_elapsed", y="Rainfall_mm", labels="Treatment", y_additional="Sigma_average_deg", logit_or_polyDegree="3")
 		### Load the data
-		dat = data()
+		list_dat_PCs = data()
+		dat = data()$dat
+		PCs = data()$PCs
 		### Create the input data frame for the plotting and model fitting
 		group = eval(parse(text=paste0("paste0(", paste(paste0("dat$`", input$labels, "`"), collapse=", '-x-', "), ")")))
 		df = eval(parse(text=paste0("data.frame(y=dat$`", input$y, "`, x=dat$`", input$x, "`, group=group, ",
-			paste(paste0("dat$`", input$labels, "`"), collapse=","), ")")))
+			paste(paste0(input$labels, "=dat$`", input$labels, "`"), collapse=","), ")")))
 		if (length(input$y_additional) > 0) {
 			for (i in 1:length(input$y_additional)) {
 				eval(parse(text=paste0("df$y_additional_", i, " = dat$", input$y_additional[i])))
@@ -195,14 +214,9 @@ server <- function(input, output, session) {
 			##############################################
 			### Scatter plot for numeric x variable    ###
 			##############################################
+			idx = which(!is.na(df$x) & !is.na(df$y))
+			df = df[idx, ]
 			df = df[order(df$x, decreasing=FALSE), ]
-			p = plotly::plot_ly(data=df,
-				y=~y,
-				x=~x,
-				color=~group,
-				type='scatter',
-				showlegend=TRUE
-			)
 			### Add hover text for each data point including all the information we have
 			vec_colnames = colnames(dat)
 			vec_labels = c()
@@ -213,12 +227,15 @@ server <- function(input, output, session) {
 				}
 				vec_labels = c(vec_labels, label)
 			}
-			p = p %>% add_trace(
-				x=eval(parse(text=paste0("dat$", input$x))),
-				y=eval(parse(text=paste0("dat$", input$y))),
+			vec_labels = vec_labels[idx]
+			p = plotly::plot_ly(data=df,
+				y=~y,
+				x=~x,
+				color=~group,
+				type='scatter',
 				text = vec_labels,
 				hoverinfo = 'text',
-				showlegend = FALSE
+				showlegend=TRUE
 			)
 			if (input$regress) {
 				n_decimal = 4
@@ -349,22 +366,35 @@ server <- function(input, output, session) {
 								showlegend=TRUE
 							)
 						}
-
-
-
-
-
-
-
-
-
-
-
-
-
 						
 					}
 				}
+			}
+			### Plot eigenvectors for the first 2 PCs each corresponding to the rotation of the variables
+			if ((((input$x=="PC1") & (input$y=="PC2")) | ((input$x=="PC2") & (input$y=="PC1"))) & input$show_eigenvec) {
+				df_arrows = data.frame(ids=rownames(PCs$rotation), x=PCs$rotation[, 1], y=PCs$rotation[, 2])
+				if ((input$x=="PC2") & (input$y=="PC1")) {
+					df_arrows = data.frame(ids=df_arrows$id, x=df_arrows$y, y=df_arrows$x)
+				}
+				df_arrows$origin = 0.0
+				### Adjust lengths
+				df_arrows$x = df_arrows$x * (abs(diff(range(df$x))) / abs(diff(range(df_arrows$x))))
+				df_arrows$y = df_arrows$y * (abs(diff(range(df$y))) / abs(diff(range(df_arrows$y))))
+				## Plot
+				p = p %>% add_annotations(
+					x=df_arrows$origin,
+					ax=df_arrows$x,
+					y=df_arrows$origin,
+					ay=df_arrows$y,
+					axref="x", ayref="y",
+					xref="x", yref="y",
+					text=df_arrows$ids,
+					arrowcolor="grey",
+					arrowsize=2,
+					arrowhead=4,
+					arrowside="start",
+					showarrow=TRUE,
+					showlegend=TRUE)
 			}
 			p = p %>% plotly::layout(
 				title=paste0(input$x, " vs ", input$y, "\n(additional ys: ", input$y_additional, ")"),
@@ -379,8 +409,33 @@ server <- function(input, output, session) {
 	#######################################################################
 	# output$debug= shiny::renderPrint({ str(data()) })
 	output$debug= shiny::renderPrint({
-		dat = data()
-		print(str(dat))
+		list_dat_PCs = data()
+		dat = data()$dat
+		PCs = data()$PCs
+		### Create the input data frame for the plotting and model fitting
+		group = eval(parse(text=paste0("paste0(", paste(paste0("dat$`", input$labels, "`"), collapse=", '-x-', "), ")")))
+		df = eval(parse(text=paste0("data.frame(y=dat$`", input$y, "`, x=dat$`", input$x, "`, group=group, ",
+			paste(paste0(input$labels, "=dat$`", input$labels, "`"), collapse=","), ")")))
+		if (length(input$y_additional) > 0) {
+			for (i in 1:length(input$y_additional)) {
+				eval(parse(text=paste0("df$y_additional_", i, " = dat$", input$y_additional[i])))
+			}
+		}
+		df = df[!is.na(df$x), ]
+		df = df[order(df$x, decreasing=FALSE), ]
+		### Add hover text for each data point including all the information we have
+		vec_colnames = colnames(dat)
+		vec_labels = c()
+		for (i in 1:nrow(dat)) {
+			label = paste0(vec_colnames[1], "=", dat[i, 1])
+			for (j in 2:ncol(dat)) {
+				label = paste0(label, "<br>", paste0(vec_colnames[j], "=", dat[i, j]))
+			}
+			vec_labels = c(vec_labels, label)
+		}
+		str(dat)
+		str(df)
+		print(vec_labels)
 		# for (i in 1:length(input$y_additional)) {
 		#   df_additional = eval(parse(text=paste0("data.frame(y_additional=dat$`", input$y_additional[i], "`, x=dat$`", input$x, "`)")))
 		#   fit_additional = lm(y_additional ~ poly(x, 3), data=df_additional)
