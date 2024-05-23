@@ -218,7 +218,7 @@ fn_define_additional_df_for_regression_line_plotting = function(df, i) {
 	y_max = max(df$y, na.rm=TRUE) + 1e-12
 	y_additional = eval(parse(text=paste0("df$y_additional_", i)))
 	idx = which(!is.na(y_additional))
-	if (length(idx)==0) {
+	if (length(idx) <= 1) {
 		return(NA)
 	}
 	y_additional = y_additional[idx]
@@ -371,7 +371,15 @@ server <- function(input, output, session) {
 				hoverinfo = 'text',
 				showlegend=TRUE
 			)
-			if (input$regress) {
+			if (nrow(df) < 1) {
+				p = p %>% plotly::add_trace(x=0, y=0, hoverinfo='text', 
+					text=paste0("Not enough data points where ", input$x, " and ", input$y, " intersect.
+								Please use a different combination of x and y variables."),
+					showlegend=FALSE
+				)
+			}
+			if ((input$regress) & (nrow(df) >= 1)) {
+
 				n_decimal = 4
 				if (vec_logit_or_polyd[1]==0) {
 					list_df_fit_metrics = fn_fit_logistic(df=df)
