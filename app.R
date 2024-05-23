@@ -162,18 +162,14 @@ fn_add_labels_for_each_datapoint = function(dat, idx, vec_labels_hover) {
 	return(vec_labels)
 }
 
-fn_fit_logistic = function(df, vec_idx=NULL) {
+fn_fit_logistic = function(df) {
 	fit = optim(
 		par=rep(1, times=6),
 		method="Nelder-Mead",
 		control=list(maxit=1e4, pgtol=0, ndeps=rep(1e-6, 11), factr=0),
 		fn=fn_cost_logistic, y=df$y, x=df$x)
-	if (is.null(vec_idx)) {
-		df$y_hat = fn_generalised_logistic(par=fit$par, x=df$x)
-	} else {
-		df$y_hat = NA
-		df$y_hat[vec_idx] = fn_generalised_logistic(par=fit$par, x=df$x)
-	}
+	df$x_hat = seq(from=min(df$x, na.rm=TRUE), to=max(df$x, na.rm=TRUE), length=nrow(df))
+	df$y_hat = fn_generalised_logistic(par=fit$par, x=df$x_hat)
 	A = fit$par[1] ### horizontal left asymptote
 	K = fit$par[2] ### horizontal right asymptote
 	C = fit$par[3] ### upper asymptote-related
@@ -195,15 +191,11 @@ fn_fit_logistic = function(df, vec_idx=NULL) {
 	))
 }
 
-fn_fit_polynomial = function(df, logit_or_polyd, vec_idx=NULL) {
+fn_fit_polynomial = function(df, logit_or_polyd) {
 	MAXIMUM_POLYNOMIAL_DEGREE = 3
 	fit = lm(y ~ poly(x, degree=logit_or_polyd), data=df)
-	if (is.null(vec_idx)) {
-		df$y_hat = fitted(fit)
-	} else {
-		df$y_hat = NA
-		df$y_hat[vec_idx] = fitted(fit)
-	}
+	df$x_hat = seq(from=min(df$x, na.rm=TRUE), to=max(df$x, na.rm=TRUE), length=nrow(df))
+	df$y_hat = predict(fit, newdata=data.frame(x=df$x_hat))
 	intercept = coef(fit)["(Intercept)"]; names(intercept) = NULL
 	for (i in 1:MAXIMUM_POLYNOMIAL_DEGREE) {
 		eval(parse(text=paste0("poly_", i, " = tryCatch(coef(fit)[i+1], error=function(e){NA})")))
@@ -383,12 +375,12 @@ server <- function(input, output, session) {
 				n_decimal = 4
 				if (vec_logit_or_polyd[1]==0) {
 					list_df_fit_metrics = fn_fit_logistic(df=df)
-					df = list_df_fit_metrics$df
-					p = p %>% plotly::add_trace(data=df, y=~y_hat, x=~x, mode="line", color=NULL,
+					# df = list_df_fit_metrics$df
+					p = p %>% plotly::add_trace(data=list_df_fit_metrics$df, y=~y_hat, x=~x_hat, mode="line", color=NULL,
 						hoverinfo='text',
 						text=paste0(
 							"y = ", input$y,
-							"<br>n = ", nrow(df),
+							"<br>n = ", nrow(list_df_fit_metrics$df),
 							"<br>Minimum(y):", round(min(c(list_df_fit_metrics$A, list_df_fit_metrics$K)), n_decimal), 
 							"<br>Maximum(y):", round(max(c(list_df_fit_metrics$A, list_df_fit_metrics$K)), n_decimal), 
 							"<br>Rate:", round(list_df_fit_metrics$B, n_decimal), 
@@ -399,12 +391,12 @@ server <- function(input, output, session) {
 					)
 				} else {
 					list_df_fit_metrics = fn_fit_polynomial(df=df, logit_or_polyd=vec_logit_or_polyd[1])
-					df = list_df_fit_metrics$df
-					p = p %>% plotly::add_trace(data=df, y=~y_hat, x=~x, mode="line", color=NULL,
+					# df = list_df_fit_metrics$df
+					p = p %>% plotly::add_trace(data=list_df_fit_metrics$df, y=~y_hat, x=~x_hat, mode="line", color=NULL,
 						hoverinfo='text',
 						text=paste0(
 							"y = ", input$y,
-							"<br>n = ", nrow(df),
+							"<br>n = ", nrow(list_df_fit_metrics$df),
 							"<br>Intercept = ", round(list_df_fit_metrics$intercept, n_decimal),
 							"<br>Linear coefficient:", round(list_df_fit_metrics$poly_1, n_decimal), 
 							"<br>Quadratic coefficient:", round(list_df_fit_metrics$poly_2, n_decimal), 
@@ -423,12 +415,12 @@ server <- function(input, output, session) {
 						if (is.na(list_df_additional_idx[1])) {next}
 						df_additional = list_df_additional_idx$df_additional
 						if (vec_logit_or_polyd[i+1]==0) {
-							list_df_fit_metrics = fn_fit_logistic(df=df_additional, vec_idx=list_df_additional_idx$idx)
-							p = p %>% plotly::add_trace(y=list_df_fit_metrics$df$y_hat, x=list_df_fit_metrics$df$x, mode="line", color=NULL,
+							list_df_fit_metrics = fn_fit_logistic(df=df_additional)
+							p = p %>% plotly::add_trace(y=list_df_fit_metrics$df$y_hat, x=list_df_fit_metrics$df$x_hat, mode="line", color=NULL,
 								hoverinfo='text',
 								text=paste0(
 									"y = ", input$y_additional[i],
-									"<br>n = ", nrow(df),
+									"<br>n = ", nrow(list_df_fit_metrics$df),
 									"<br>Minimum(y):", round(min(c(list_df_fit_metrics$A, list_df_fit_metrics$K)), n_decimal), 
 									"<br>Maximum(y):", round(max(c(list_df_fit_metrics$A, list_df_fit_metrics$K)), n_decimal), 
 									"<br>Rate:", round(list_df_fit_metrics$B, n_decimal), 
@@ -439,12 +431,12 @@ server <- function(input, output, session) {
 								showlegend=TRUE
 							)
 						} else {
-							list_df_fit_metrics = fn_fit_polynomial(df=df_additional, logit_or_polyd=vec_logit_or_polyd[i+1], vec_idx=list_df_additional_idx$idx)
-							p = p %>% plotly::add_trace(y=list_df_fit_metrics$df$y_hat, x=list_df_fit_metrics$df$x, mode="line", color=NULL,
+							list_df_fit_metrics = fn_fit_polynomial(df=df_additional, logit_or_polyd=vec_logit_or_polyd[i+1])
+							p = p %>% plotly::add_trace(y=list_df_fit_metrics$df$y_hat, x=list_df_fit_metrics$df$x_hat, mode="line", color=NULL,
 								hoverinfo='text',
 								text=paste0(
 									"y = ", input$y_additional[i],
-									"<br>n = ", nrow(df),
+									"<br>n = ", nrow(list_df_fit_metrics$df),
 									"<br>Intercept = ", round(list_df_fit_metrics$intercept, n_decimal),
 									"<br>Linear coefficient:", round(list_df_fit_metrics$poly_1, n_decimal), 
 									"<br>Quadratic coefficient:", round(list_df_fit_metrics$poly_2, n_decimal), 
@@ -478,10 +470,12 @@ server <- function(input, output, session) {
 					showarrow=TRUE,
 					showlegend=TRUE)
 			}
+			delta_y = 0.01 * abs(diff(range(df$y, na.rm=TRUE)))
+			delta_x = 0.01 * abs(diff(range(df$x, na.rm=TRUE)))
 			p = p %>% plotly::layout(
 				title=paste0(input$x, " vs ", input$y, "\n(additional ys: ", input$y_additional, ")"),
-				yaxis=list(title=input$y),
-				xaxis=list(title=input$x)
+				yaxis=list(title=input$y, range=c(min(df$y, na.rm=TRUE)-delta_y, max(df$y, na.rm=TRUE)+delta_y)),
+				xaxis=list(title=input$x, range=c(min(df$x, na.rm=TRUE)-delta_x, max(df$x, na.rm=TRUE)+delta_x))
 			)
 		}
 		p = p %>% plotly::config(toImageButtonOptions = list(format = "svg"))
